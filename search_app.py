@@ -1,11 +1,11 @@
 import json
-from datetime import datetime
-import pandas as pd
-from pymongo import MongoClient
-from sqlalchemy import create_engine, text
-from multiprocessing import Process
-from multiprocessing import Process
 import threading
+import pandas as pd
+from datetime import datetime
+from pymongo import MongoClient
+from multiprocessing import Process
+from sqlalchemy import create_engine, text
+
 
 # Print user details
 def user_details():
