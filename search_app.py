@@ -1,140 +1,245 @@
+import json
+from datetime import datetime
 import pandas as pd
 from pymongo import MongoClient
 from sqlalchemy import create_engine, text
 
 # Print user details
-def user_details(): 
+def user_details():
     name = input("Enter user screen name: ")
-    results = con.execute(text(f"SELECT id, name, screen_name, followers_count, friends_count FROM users where screen_name = '{name}' "))
-    user_details = {}
     
-    for row in results:
-        user_details['id'] = row[0]
-        user_details['name'] = row[1]
-        user_details['screen_name'] = row[2]
-        user_details['followers_count'] = row[3]
-        user_details['friends_count'] = row[4]
-   
-    agg_results = no_of_tweets()
-    for i in agg_results:
-        if i['_id'] == user_details['id']:
-            user_details['num_of_tweets'] = i['num_of_tweets']
-    
-    columns = ['name', 'screen_name', 'followers_count', 'friends_count', 'num_of_tweets']
-    to_dataframe([user_details], columns, 1)
+    if f"user_details_{name}" in cache_dict:
+        print("from cache")
+        final_df = pd.DataFrame(cache_dict[f"user_details_{name}"])
+        cache_dict[f"user_details_{name}"]['count'] += 1
+    else:
+        print("from db")
+        stmt = f"SELECT id as _id, name, screen_name, followers_count, friends_count FROM users where screen_name = '{name}' "
+        df1 = pd.read_sql(text(stmt), con)        
+        agg_results = no_of_tweets()
+        df2 =  pd.DataFrame(list(agg_results))
+        final_df = pd.merge(df1, df2, on = '_id').drop("_id", axis = 1)
+        update_cache(cache_dict, f"user_details_{name}", final_df)
+
+    display_df(final_df)
 
     
 # Top n popular users based on followers count
 def top_popular_users():
     n = int(input("Enter number of users: "))
-    results = con.execute(text(f"SELECT id, name, screen_name, followers_count, friends_count FROM users order by followers_count desc limit {n}"))
-    user_details = []
-
-    for row in results:
-        temp_dic = {}
-        temp_dic['name'] = row[1]
-        temp_dic['screen_name'] = row[2]
-        temp_dic['followers_count'] = row[3]
-        temp_dic['friends_count'] = row[4]
-        user_details.append(temp_dic)
-
-    columns = ['name', 'screen_name', 'followers_count', 'friends_count']
-    to_dataframe(user_details, columns, n)
+    if f"top_popular_users_{n}" in cache_dict:
+        print("from cache")
+        final_df = pd.DataFrame(cache_dict[f"top_popular_users_{n}"])
+        cache_dict[f"top_popular_users_{n}"]['count'] += 1
+    else:
+        print("from db")
+        stmt = f"SELECT id as _id, name, screen_name, followers_count, friends_count FROM users order by followers_count desc limit {n}"
+        df1 = pd.read_sql(text(stmt), con)
+        agg_results = no_of_tweets()
+        df2 =  pd.DataFrame(list(agg_results))
+        final_df = pd.merge(df1, df2, on = '_id').drop("_id", axis = 1)
+        update_cache(cache_dict, f"top_popular_users_{n}", final_df)
+    display_df(final_df)
 
         
 # Display tweets for given tweets 
 def user_tweets():
     name = input("Enter user screen name:")    
     n = int(input("Enter how many tweets: "))
-    results = con.execute(text(f"SELECT id FROM users where screen_name = '{name}' "))
-    for row in results:
-        id = row[0]
+    order = int(input("Enter 1 to order by date, 2 to order by most retweeted: "))
+    range = input("Do you want date range(y|n):")
+    max_date, min_date = "", ""
+    if range == "y":
+        max_date = input("Enter maximum date(yyyy-mm-dd): ")
+        min_date = input("Enter minimum date(yyyy-mm-dd): ")
+    
+    if f"user_tweets_{name}_{n}_{order}_{max_date}_{min_date}" in cache_dict:
+        print("from cache")
+        final_df = pd.DataFrame(cache_dict[f"user_tweets_{name}_{n}_{order}_{max_date}_{min_date}"])
+        cache_dict[f"user_tweets_{name}_{n}_{order}_{max_date}_{min_date}"]['count'] += 1
         
-    tweets = db.tweets.find({"user_id": id})             
-    tweets = order_results(tweets)
+    else:    
+        print("from db")
+        results = con.execute(text(f"SELECT id FROM users where screen_name = '{name}' "))
 
-    columns = ['created_at', 'text', 'quote_count', 'reply_count', 'retweet_count', 'favorite_count', 'hashtags', 'user_mentions']
-    to_dataframe(tweets, columns, n)
+        for row in results:
+            id = row[0]
+
+        if range == "y":
+            tweets = db.tweets.find({"user_id": id, 
+                "created_at": {
+                    "$gt": min_date,
+                    "$lt":  max_date}
+            })
+
+        else: 
+            tweets = db.tweets.find({"user_id": id}) 
+
+        if order == 1:
+            tweets.sort("created_at", -1)
+        else:
+            tweets.sort("retweet_count", -1)
+
+        final_df = pd.DataFrame(list(tweets))
+        columns = ['created_at', 'text', 'quote_count', 'reply_count', 'retweet_count', 'favorite_count', 'hashtags', 'user_mentions']
+        final_df = final_df.filter(columns)
+        update_cache(cache_dict, f"user_tweets_{name}_{n}_{order}_{max_date}_{min_date}", final_df)
+    display_df(final_df.head(n))
 
             
 # Prints top active users        
 def most_tweeted_users():
     n = int(input("Enter number of active tweets:"))
-    agg_result = no_of_tweets()
-    count = 0
-    number_of_tweets = []
-    user_ids = []
-    
-    for i in agg_result:
-        if count < n:
-            number_of_tweets.append(i['num_of_tweets'])
-            user_ids.append(i['_id'])
-            count += 1 
-            
-    if len(user_ids) <= 0:
-        print("Please enter valid number")
-        return
-
+    if f"most_tweeted_users_{n}" in cache_dict:
+        print("from cache")
+        final_df = pd.DataFrame(cache_dict[f"most_tweeted_users_{n}"])
+        cache_dict[f"most_tweeted_users_{n}"]['count'] += 1
+        
     else:
-        user_ids = ",".join(str(user) for user in user_ids)
-        
-        stmt = f"""SELECT u.id, u.name, u.screen_name, u.followers_count, u.friends_count FROM users u
-                   JOIN unnest(array[{user_ids}]) with ordinality as l(id, idx) ON u.id = l.id
-                   ORDER BY l.idx"""
-
-    results = con.execute(text(stmt))
-    user_details = []
-
-    for i, row in enumerate(results):
-        temp_dic = {}
-        temp_dic['name'] = row[1]
-        temp_dic['screen_name'] = row[2]
-        temp_dic['followers_count'] = row[3]
-        temp_dic['friends_count'] = row[4]
-        temp_dic['num_of_tweets'] = number_of_tweets[i]
-        user_details.append(temp_dic)
-        
-    columns = ['name', 'screen_name', 'followers_count', 'friends_count', 'num_of_tweets']
-    to_dataframe(user_details, columns, n)
+        print("from db")
+        agg_results = no_of_tweets()
+        df1 = pd.DataFrame(list(agg_results))
+        df1 = df1.iloc[0: n]
+        stmt = f"""select id as user_id, screen_name, followers_count, friends_count from users 
+                   where id in  {tuple(df1['_id'].values.tolist())}"""
+    
+        df2 = pd.read_sql(text(stmt), con) 
+        final_df = pd.merge(df2, df1, right_on = '_id', left_on = "user_id").drop(["_id", "user_id"], axis = 1)
+        update_cache(cache_dict, f"most_tweeted_users_{n}", final_df)
+    display_df(final_df.sort_values(by = "num_of_tweets", ascending = False))
 
         
 # Search by word and displays most retweeted documents       
 def search_by_word():
     word = input("Enter a word: ")
     n = int(input("Enter number of top tweets: "))
-    count = 0
-    tweets = db.tweets.find({"text" : {"$regex" : word}})
-    tweets = order_results(tweets)
-    columns = ['_id', 'created_at', 'text', 'quote_count', 'reply_count', 'retweet_count', 'favorite_count', 'hashtags', 'user_mentions']
-    to_dataframe(tweets, columns, n)
+    order = int(input("Enter 1 to order by date, 2 to order by most retweeted: "))
+    range = input("Do you want date range(y|n):")
+    max_date, min_date = "", ""
+    if range == "y":
+        max_date = input("Enter maximum date(yyyy-mm-dd): ")
+        min_date = input("Enter minimum date(yyyy-mm-dd): ")
+        
+    if f"search_by_word_{word}_{n}_{order}_{max_date}_{min_date}" in cache_dict:
+        print("from cache")
+        final_df = pd.DataFrame(cache_dict[f"search_by_word_{word}_{n}_{order}_{max_date}_{min_date}"])
+        cache_dict[f"search_by_word_{word}_{n}_{order}_{max_date}_{min_date}"]['count'] += 1
+        
+    else:
+        print("from db")
+        if range == "y":
+            tweets = db.tweets.find({"text" : {"$regex" : word}, 
+                                     "created_at": {
+                                        "$gt": min_date,
+                                        "$lt":  max_date}
+                                            })
+        else:
+            tweets = db.tweets.find({"text" : {"$regex" : word}})
+
+        if order == 1:
+            tweets.sort("created_at", -1)
+        else:
+            tweets.sort("retweet_count", - 1)
+
+        df = pd.DataFrame(list(tweets))
+        df = df.iloc[0: n]
+        if len(df) == 0:
+            return
+
+        columns = ['screen_name', 'created_at', 'text', 'quote_count', 'reply_count', 'retweet_count', 
+                   'favorite_count', 'hashtags', 'user_mentions']
+        if n == 1:
+            stmt = f"select id as user_id, screen_name from users where id = {df['user_id'].values.tolist()[0]}"
+
+        else:
+            stmt = f"select id as user_id, screen_name from users where id in {tuple(df['user_id'].values.tolist())}"
+
+        temp_df = pd.read_sql(text(stmt), con)
+        final_df = pd.merge(df, temp_df, on = "user_id")
+        final_df = final_df.filter(columns)
+        update_cache(cache_dict, f"search_by_word_{word}_{n}_{order}_{max_date}_{min_date}", final_df)
+    display_df(final_df)
 
             
 # Search by hashtags and displays most retweeted documents       
 def search_by_hashtag():
     hashtag = input("Enter a hashtag: ")
     n = int(input("Enter number of top tweets: "))
-    count = 0
-    tweets = db.tweets.find({"hashtags" : hashtag})
-    tweets = order_results(tweets)
-    columns = ['created_at', 'text', 'quote_count', 'reply_count', 'retweet_count', 'favorite_count', 'hashtags', 'user_mentions']
+    order = int(input("Enter 1 to order by date, 2 to order by most retweeted: "))
+    range = input("Do you want date range(y|n):")
+    max_date, min_date = "", ""
+    if range == "y":
+        max_date = input("Enter maximum date(yyyy-mm-dd): ")
+        min_date = input("Enter minimum date(yyyy-mm-dd): ")
+        
+    if f"search_by_hashtag_{hashtag}_{n}_{order}_{max_date}_{min_date}" in cache_dict:
+        print("from cache")
+        final_df = pd.DataFrame(cache_dict[f"search_by_hashtag_{hashtag}_{n}_{order}_{max_date}_{min_date}"])
+        cache_dict[f"search_by_hashtag_{hashtag}_{n}_{order}_{max_date}_{min_date}"]['count'] += 1
+    
+    else:
+        print("from db")
+        if range == "y":
+             tweets = db.tweets.find({"hashtags" : hashtag, 
+                                     "created_at": {
+                                        "$gt": min_date,
+                                        "$lt":  max_date}
+                                            })           
+        else:
+            tweets = db.tweets.find({"hashtags" : hashtag})
+   
+        if order == 1:
+            tweets.sort("created_at", -1)
+        else:
+            tweets.sort("retweet_count", - 1)
+            
+        df = pd.DataFrame(list(tweets))
+        df = df.iloc[0: n]
+        
+        if len(df) == 0:
+            return
+        
+        columns = ['screen_name', 'created_at', 'text', 'quote_count', 'reply_count', 'retweet_count', 
+                   'favorite_count', 'hashtags', 'user_mentions']
 
-    to_dataframe(tweets, columns, n)
+        if n == 1:
+            stmt = f"select id as user_id, screen_name from users where id = {df['user_id'].values.tolist()[0]}"
 
+        else:
+            stmt = f"select id as user_id, screen_name from users where id in {tuple(df['user_id'].values.tolist())}"
+
+        temp_df = pd.read_sql(text(stmt), con)
+        final_df = pd.merge(df, temp_df, on = "user_id")
+        final_df = final_df.filter(columns)
+        update_cache(cache_dict, f"search_by_hashtag_{hashtag}_{n}_{order}_{max_date}_{min_date}", final_df)
+    display_df(final_df)
+
+    
 # Displays Top N popular tweets    
 def popular_hashtags():
-    tweets = db.tweets.aggregate([
-                    { "$unwind": "$hashtags" },
-                    { "$group": {
-                        "_id": "$hashtags",
-                        "count": { "$sum": 1 }
-                    }}, 
-                    {"$sort" : {"count": -1} },
-                    { "$replaceRoot": { "newRoot": { "hashtag": "$_id" , "num_of_tweets": "$count"} } }
-                ])
-    
     n = int(input("Enter number of top hashtags to display: "))
-    columns = ['hashtag', 'num_of_tweets']
-    to_dataframe(tweets, columns, n)
+ 
+    if f"popular_hashtags_{n}" in cache_dict:
+        print("from cache")
+        final_df = pd.DataFrame(cache_dict[f"popular_hashtags_{n}"])
+        cache_dict[f"popular_hashtags_{n}"]['count'] += 1
+        
+    else:
+        print("from db")
+        agg_results = db.tweets.aggregate([
+                        { "$unwind": "$hashtags" },
+                        { "$group": {
+                            "_id": "$hashtags",
+                            "count": { "$sum": 1 }
+                        }}, 
+                        {"$sort" : {"count": -1} },
+                        { "$replaceRoot": { "newRoot": { "hashtag": "$_id" , "num_of_tweets": "$count"} } }
+                    ])
+
+        df = pd.DataFrame(list(agg_results))
+        final_df = df.iloc[0: n]
+        update_cache(cache_dict, f"popular_hashtags_{n}", final_df)
+    display_df(final_df)
 
             
 # Number of tweets by an user
@@ -154,48 +259,36 @@ def no_of_tweets():
     return agg_result
 
 
-# Ordering the results based on the input parameter
-def order_results(tweets):
-    choice = int(input("Enter 1 for most recent tweets, 2 for most popular tweets. 3 for tweets in date range: "))
-    if choice == 1:
-        return tweets.sort("created_at", -1)
-    
-    elif choice == 2:
-        return tweets.sort("retweet_count", -1)
-    
-    elif choice == 3:
-        max_date_inc = input("Enter maximum date(yyyy-mm-dd): ")
-        min_date_exc = input("Enter minimum date(yyyy-mm-dd): ")
-        tweets = db.tweets.find({
-            "created_at": {
-                "$gt": min_date_exc,
-                "$lt":  max_date_inc
-            }
-        }).sort("created_at", -1)
-        return tweets
-
-    else:
-        return []
-
-    
-# Converting dictionary to dataframe
-def to_dataframe(tweets, columns, n):
-    df = pd.DataFrame(columns = columns)
-    count = 0
-    for i in tweets:
-        if count < n:
-            temp_dic = {k:v for k, v in i.items() if k in columns}
-            temp_df = pd.DataFrame(temp_dic.values(), index = temp_dic.keys()).T
-            df = pd.concat([df, temp_df])
-            count += 1
-    df = df.reset_index().drop("index", axis = 1)
-    
+def display_df(df):
     with pd.option_context('display.max_colwidth', None):
-        display(df.head(n))
-        
+        display(df)       
+
+def update_cache(cache_dict, temp_key, df):
+    if len(cache_dict) == 5:
+        least_count = cache_dict[list(cache_dict.keys())[0]]['count']
+        key_dict = ""
+        for key, value in cache_dict.items():
+            if least_count > cache_dict[key]['count']:
+                least_count = cache_dict[key]['count']   
+                key_dict = key
+        cache_dict.pop(key_dict)
+     
+
+    cache_dict[temp_key] = df.to_dict()
+    cache_dict[temp_key]['count'] = 1
+    cache_dict['entry_time'] = datetime.now()
+             
         
 if __name__ == 'search_app':
     client = MongoClient("mongodb://localhost:27017")
     db = client["twitter"]
     engine = create_engine('postgresql://postgres:root@localhost:5432/twitter')
     con = engine.connect()
+
+    with open("cache.txt", "r") as f1:
+        cache_dict = {}
+        for line in f1:
+            try:
+                cache_dict = json.loads(line)
+            except ValueError:
+                pass   
