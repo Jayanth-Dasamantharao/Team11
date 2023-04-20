@@ -3,6 +3,9 @@ from datetime import datetime
 import pandas as pd
 from pymongo import MongoClient
 from sqlalchemy import create_engine, text
+from multiprocessing import Process
+from multiprocessing import Process
+import threading
 
 # Print user details
 def user_details():
@@ -263,20 +266,45 @@ def display_df(df):
     with pd.option_context('display.max_colwidth', None):
         display(df)       
 
+        
 def update_cache(cache_dict, temp_key, df):
     if len(cache_dict) == 5:
         least_count = cache_dict[list(cache_dict.keys())[0]]['count']
-        key_dict = ""
+        key_dict = list(cache_dict.keys())[0]
+        
         for key, value in cache_dict.items():
             if least_count > cache_dict[key]['count']:
                 least_count = cache_dict[key]['count']   
                 key_dict = key
+                
         cache_dict.pop(key_dict)
      
-
     cache_dict[temp_key] = df.to_dict()
     cache_dict[temp_key]['count'] = 1
-    cache_dict['entry_time'] = datetime.now()
+    cache_dict[temp_key]['entry_time'] = str(datetime.now())[:-7]
+
+    
+def write_cache():
+    with open('cache.txt', 'w') as convert_file:
+        convert_file.write(json.dumps(cache_dict))
+    threading.Timer(10, write_cache).start()
+
+    
+def check_staleness():
+    current_time = str(datetime.now())[:-7]
+    temp_keys = []
+    format = "%Y-%m-%d %H:%M:%S"
+    for key in cache_dict.keys():
+        print("key", key)
+        time1 = datetime.strptime(current_time, format)
+        time2 = datetime.strptime(cache_dict[key]['entry_time'], format)
+        if (time1 - time2).total_seconds() /60 > 1:
+            temp_keys.append(key)
+        
+    for i in temp_keys:
+        cache_dict.pop(i)
+   
+    threading.Timer(10, check_staleness).start()
              
         
 if __name__ == 'search_app':
@@ -292,3 +320,10 @@ if __name__ == 'search_app':
                 cache_dict = json.loads(line)
             except ValueError:
                 pass   
+            
+    p1 = Process(target = write_cache)
+    p1.start()
+    p2 = Process(target = check_staleness)
+    p2.start()
+    write_cache()
+    check_staleness()
